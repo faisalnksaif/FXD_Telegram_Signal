@@ -215,8 +215,7 @@ async function main(): Promise<void> {
   console.log("Listener started. Session persisted in", config.telegramSessionFilePath);
 }
 
-const isMainModule = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
-if (isMainModule) {
+if (require.main === module) {
   main().catch((error) => {
     console.error("Fatal error:", error);
     process.exit(1);
