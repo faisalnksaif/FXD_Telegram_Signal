@@ -38,12 +38,14 @@ export class SignalStore {
     return stored;
   }
 
-  // Returns events after `seq`. As a side effect, any SIGNAL_ALERT included
-  // in the response is marked consumed (isConsumed: true), so it will never
-  // be served as unconsumed again for the lifetime of this process.
+  // Returns events after `seq`, each stamped with the isConsumed value it
+  // had BEFORE this call (so the first caller to see a SIGNAL_ALERT gets
+  // isConsumed:false). As a side effect, every SIGNAL_ALERT returned here is
+  // then marked consumed for all future calls.
   since(seq: number): StoredSignalEvent[] {
-    const result = this.events.filter((e) => e.seq > seq);
-    for (const e of result) {
+    const matched = this.events.filter((e) => e.seq > seq);
+    const result = matched.map((e) => ({ ...e }));
+    for (const e of matched) {
       if (e.event.type === "SIGNAL_ALERT") {
         e.isConsumed = true;
       }
