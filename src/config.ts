@@ -31,9 +31,6 @@ export const config = {
   targetGroupName: process.env.TARGET_GROUP_NAME ?? "FXD Trades | VIP",
   dataFilePath:
     process.env.DATA_FILE_PATH ?? path.join(projectRoot, "data", "messages.jsonl"),
-  signalConsumedStatePath:
-    process.env.SIGNAL_CONSUMED_STATE_PATH ??
-    path.join(projectRoot, "data", "signalConsumption.json"),
   apiPort: Number(process.env.API_PORT ?? 8787)
 };
 

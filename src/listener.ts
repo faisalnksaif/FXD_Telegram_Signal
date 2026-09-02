@@ -171,7 +171,7 @@ export async function createClient(): Promise<TelegramClient> {
 
 async function main(): Promise<void> {
   const store = new MessageStore(config.dataFilePath);
-  const signalStore = new SignalStore(1000, config.signalConsumedStatePath);
+  const signalStore = new SignalStore();
   createApiServer(signalStore, config.apiPort);
   const client = await createClient();
 
