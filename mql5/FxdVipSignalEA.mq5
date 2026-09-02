@@ -135,7 +135,15 @@ void ProcessEntry(string entry)
    if(evEnd < 0) return;
    string eventJson = StringSubstr(entry, evStart, evEnd - evStart + 1);
 
-   ProcessLine(eventJson);
+   // The server marks isConsumed:true on any SIGNAL_ALERT it has already
+   // served before, so a restarted EA re-fetching the backlog from seq 0
+   // never reopens a signal it (or a prior EA instance) already executed.
+   bool alreadyConsumed = (JsonGetString(eventJson, "type") == "SIGNAL_ALERT")
+                           && JsonGetBool(entry, "isConsumed");
+
+   if(!alreadyConsumed)
+      ProcessLine(eventJson);
+
    g_lastSeq = seq;
   }
 
@@ -171,6 +179,16 @@ double JsonGetNumber(const string &json, const string key)
   }
 
 //+------------------------------------------------------------------+
+bool JsonGetBool(const string &json, const string key)
+  {
+   string pattern = "\"" + key + "\":";
+   int start = StringFind(json, pattern);
+   if(start < 0) return false;
+   start += StringLen(pattern);
+   return StringSubstr(json, start, 4) == "true";
+  }
+
+//+------------------------------------------------------------------+
 ulong MagicFor(string direction)
   {
    return InpMagicBase + (direction == "SELL" ? 1 : 0);
@@ -198,12 +216,78 @@ void ProcessLine(string line)
       double tp1 = JsonGetNumber(line, "tp1");
       double tp2 = JsonGetNumber(line, "tp2");
       double tp3 = JsonGetNumber(line, "tp3");
+
+      if(HasOpenPositionForLevels(symbol, MagicFor(direction), sl, tp1, tp2, tp3))
+        {
+         Print("FxdVipSignalEA: skipping duplicate SIGNAL_ALERT for ", symbol, " (already open)");
+         return;
+        }
+
       OpenSignal(symbol, direction, sl, tp1, tp2, tp3);
      }
    else if(type == "TP1_HIT" || type == "TP2_HIT" || type == "TP3_HIT" || type == "SL_HIT")
      {
       HandleOutcome(symbol, type);
      }
+  }
+
+//+------------------------------------------------------------------+
+// Clamps a stop price so it respects the broker's minimum stop distance
+// (SYMBOL_TRADE_STOPS_LEVEL/FREEZE_LEVEL) from the current market price,
+// and rounds it to the symbol's tick size. isStopLoss selects which side
+// of price the level must stay on for BUY vs SELL.
+double NormalizeStopPrice(string symbol, ENUM_ORDER_TYPE orderType, double price, double level, bool isStopLoss)
+  {
+   if(level <= 0)
+      return 0.0;
+
+   int    stopsPoints  = (int)MathMax(SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL),
+                                       SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL));
+   double point        = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double minDistance   = stopsPoints * point;
+
+   bool buySide = (orderType == ORDER_TYPE_BUY);
+   // BUY: SL must be below price, TP above. SELL: SL above price, TP below.
+   bool levelBelowPrice = (buySide && isStopLoss) || (!buySide && !isStopLoss);
+
+   if(levelBelowPrice && price - level < minDistance)
+      level = price - minDistance;
+   else if(!levelBelowPrice && level - price < minDistance)
+      level = price + minDistance;
+
+   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   if(tickSize > 0)
+      level = MathRound(level / tickSize) * tickSize;
+
+   return NormalizeDouble(level, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS));
+  }
+
+//+------------------------------------------------------------------+
+// True if an open position already exists for this symbol/magic whose SL
+// and TP match this signal's levels — used to avoid reopening a signal
+// that was already executed before an EA restart.
+bool HasOpenPositionForLevels(string symbol, ulong magic, double sl, double tp1, double tp2, double tp3)
+  {
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double tol   = MathMax(point, 0.0000001) * 2;
+
+   int total = PositionsTotal();
+   for(int i = 0; i < total; i++)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != (long)magic) continue;
+
+      double posSl = PositionGetDouble(POSITION_SL);
+      double posTp = PositionGetDouble(POSITION_TP);
+      if(MathAbs(posSl - sl) > tol) continue;
+
+      if(MathAbs(posTp - tp1) <= tol || MathAbs(posTp - tp2) <= tol || MathAbs(posTp - tp3) <= tol)
+         return true;
+     }
+   return false;
   }
 
 //+------------------------------------------------------------------+
@@ -227,11 +311,14 @@ void OpenSignal(string symbol, string direction, double sl, double tp1, double t
                         ? SymbolInfoDouble(symbol, SYMBOL_ASK)
                         : SymbolInfoDouble(symbol, SYMBOL_BID);
 
+      double legSl = NormalizeStopPrice(symbol, orderType, price, sl, true);
+      double legTp = NormalizeStopPrice(symbol, orderType, price, tps[i], false);
+
       bool ok;
       if(orderType == ORDER_TYPE_BUY)
-         ok = trade.Buy(InpLegLots, symbol, price, sl, tps[i], comment);
+         ok = trade.Buy(InpLegLots, symbol, price, legSl, legTp, comment);
       else
-         ok = trade.Sell(InpLegLots, symbol, price, sl, tps[i], comment);
+         ok = trade.Sell(InpLegLots, symbol, price, legSl, legTp, comment);
 
       if(!ok)
          Print("FxdVipSignalEA: leg ", i + 1, " open failed for ", symbol, ": ", trade.ResultRetcodeDescription());
@@ -308,6 +395,12 @@ void HandleOutcome(string symbol, string eventType)
    else if(eventType == "TP2_HIT") legIndex = 1;
    else if(eventType == "TP3_HIT") legIndex = 2;
 
+   // Capture the hit leg's own TP price before closing it (TP2_HIT needs it
+   // to move the remaining leg's SL up to the TP2 level).
+   double hitLegTp = 0;
+   if(legIndex >= 0 && legIndex < ArraySize(legTickets) && PositionSelectByTicket(legTickets[legIndex]))
+      hitLegTp = PositionGetDouble(POSITION_TP);
+
    if(legIndex >= 0 && legIndex < ArraySize(legTickets))
       ClosePosition(legTickets[legIndex]);
 
@@ -326,6 +419,15 @@ void HandleOutcome(string symbol, string eventType)
         {
          if(i == legIndex) continue;
          MoveToBreakEven(legTickets[i], entryPrice);
+        }
+     }
+   else if(eventType == "TP2_HIT")
+     {
+      // Move remaining leg(s)' SL up to the TP2 level (locking in TP2 profit).
+      for(int i = 0; i < ArraySize(legTickets); i++)
+        {
+         if(i == legIndex) continue;
+         MoveToBreakEven(legTickets[i], hitLegTp);
         }
      }
   }
@@ -361,11 +463,11 @@ void ClosePosition(ulong ticket)
   }
 
 //+------------------------------------------------------------------+
-void MoveToBreakEven(ulong ticket, double entryPrice)
+void MoveToBreakEven(ulong ticket, double newSlPrice)
   {
    if(!PositionSelectByTicket(ticket)) return;
    double tp = PositionGetDouble(POSITION_TP);
-   if(!trade.PositionModify(ticket, entryPrice, tp))
+   if(!trade.PositionModify(ticket, newSlPrice, tp))
       Print("FxdVipSignalEA: failed to move ticket ", ticket, " to BE: ", trade.ResultRetcodeDescription());
   }
 //+------------------------------------------------------------------+

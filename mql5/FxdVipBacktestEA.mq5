@@ -246,15 +246,26 @@ void ManageBatch(string comment)
       bool hit = isBuy ? (currentPrice >= tp) : (currentPrice <= tp);
       if(!hit) continue;
 
+      double hitLegTp = tp;
+
       ClosePosition(ticket);
 
-      // After TP1 (legIndex 0), move the remaining legs' SL to break-even.
+      // After TP1 (legIndex 0), move the remaining legs' SL to break-even (entry).
+      // After TP2 (legIndex 1), move the remaining leg's SL up to the TP2 level.
       if(legIndex == 0)
         {
          for(int k = 0; k < count; k++)
            {
             if(k == legIndex) continue;
             MoveToBreakEven(legTickets[k], entryPrice);
+           }
+        }
+      else if(legIndex == 1)
+        {
+         for(int k = 0; k < count; k++)
+           {
+            if(k == legIndex) continue;
+            MoveToBreakEven(legTickets[k], hitLegTp);
            }
         }
      }
@@ -291,11 +302,11 @@ void ClosePosition(ulong ticket)
   }
 
 //+------------------------------------------------------------------+
-void MoveToBreakEven(ulong ticket, double entryPrice)
+void MoveToBreakEven(ulong ticket, double newSlPrice)
   {
    if(!PositionSelectByTicket(ticket)) return;
    double tp = PositionGetDouble(POSITION_TP);
-   if(!trade.PositionModify(ticket, entryPrice, tp))
+   if(!trade.PositionModify(ticket, newSlPrice, tp))
       Print("FxdVipBacktestEA: failed to move ticket ", ticket, " to BE: ", trade.ResultRetcodeDescription());
   }
 //+------------------------------------------------------------------+
