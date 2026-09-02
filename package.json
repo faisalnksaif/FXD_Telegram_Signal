@@ -8,6 +8,7 @@
 		"dev": "tsx watch src/listener.ts",
 		"dev:once": "tsx src/listener.ts",
 		"fetch:history": "tsx src/fetchHistory.ts",
+		"fetch:history:byname": "tsx src/fetchHistoryByName.ts",
 		"export:backtest": "tsx src/exportBacktestSignals.ts",
 		"build": "tsc -p tsconfig.json",
 		"start": "node dist/listener.js",

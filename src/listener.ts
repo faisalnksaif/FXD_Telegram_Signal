@@ -5,6 +5,7 @@ import { TelegramClient } from "telegram";
 import { NewMessage } from "telegram/events";
 import { ConnectionTCPFull } from "telegram/network";
 import { StringSession } from "telegram/sessions";
+import { utils } from "telegram";
 import { config } from "./config";
 import { MessageStore } from "./messageStore";
 import { SignalStore } from "./signalStore";
@@ -82,7 +83,7 @@ export async function resolveChatId(client: TelegramClient, groupNameOrId: strin
     const entity = await client.getEntity(username);
 
     if (entity && "id" in entity) {
-      const chatId = typeof entity.id === "bigint" ? Number(entity.id) : (entity.id as unknown as number);
+      const chatId = Number(utils.getPeerId(entity));
       console.log(`Resolved "${groupNameOrId}" to chat ID: ${chatId}`);
       return chatId;
     }
@@ -102,7 +103,7 @@ export async function resolveChatId(client: TelegramClient, groupNameOrId: strin
       ("username" in entity ? (entity as any).username : null);
 
     if (title && title.toLowerCase() === groupNameOrId.toLowerCase()) {
-      const chatId = typeof entity.id === "bigint" ? Number(entity.id) : (entity.id as unknown as number);
+      const chatId = Number(utils.getPeerId(entity));
       console.log(`Resolved "${groupNameOrId}" to chat ID: ${chatId}`);
       return chatId;
     }
